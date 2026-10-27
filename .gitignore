@@ -4,3 +4,6 @@ __pycache__/
 checkpoints/
 .smoke-checkpoints/
 .smoke-default/
+.smoke-managed/
+trained_models/
+dataset_cache/

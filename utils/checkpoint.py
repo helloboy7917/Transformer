@@ -15,6 +15,7 @@ def save_checkpoint(
     model_config: dict,
     tokenizer: dict,
     best_val_loss: float | None = None,
+    metadata: dict | None = None,
 ) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -26,6 +27,7 @@ def save_checkpoint(
         "model_config": model_config,
         "tokenizer": tokenizer,
         "best_val_loss": best_val_loss,
+        "metadata": metadata or {},
     }
     try:
         torch.save(state, temporary)

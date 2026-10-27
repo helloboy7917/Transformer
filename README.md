@@ -1,94 +1,169 @@
-# Mini Transformer (문자 단위 GPT)
+# Transformer: 다중 모델 언어 모델 실험
 
-PyTorch의 기본 텐서 연산으로 직접 구현한 소형 Decoder-only 언어 모델입니다. 학습과 실험을 위한 프로젝트이며, 사전 학습 모델을 내려받지 않습니다. Hugging Face Transformers, `nn.Transformer`, `nn.MultiheadAttention`도 사용하지 않습니다.
+PyTorch로 직접 구현한 Decoder-only Transformer(GPT 구조)를 재사용해 여러 개의 독립적인 문자 단위 언어 모델을 만들고 학습하는 프로젝트입니다. 각 모델은 별도의 설정, 가중치, 토크나이저, 데이터 출처와 학습 기록을 가집니다.
 
-## 프로젝트 구성
+Hugging Face의 사전 학습 모델이나 `nn.Transformer`, `nn.MultiheadAttention`은 사용하지 않습니다. 모델 구조는 `model/`의 직접 구현을 사용하며, Hugging Face Hub는 데이터셋을 가져오는 용도로만 사용합니다.
 
-```text
-config.py                   모델 및 학습 하이퍼파라미터
-model/embedding.py          토큰 임베딩과 학습 가능한 위치 임베딩
-model/attention.py          Scaled Dot-Product 및 Causal Multi-Head Attention
-model/feedforward.py        GELU Feed Forward Network
-model/transformer_block.py  Pre-LayerNorm 블록과 Residual Connection
-model/gpt.py                Decoder-only 언어 모델과 텍스트 생성
-data/tokenizer.py           문자 단위 토크나이저
-data/dataset.py             다음 문자 예측용 데이터와 배치 생성
-data/sample.txt             직접 작성한 소규모 샘플 데이터
-train.py                    학습, 검증, 체크포인트 저장 및 재개
-generate.py                 체크포인트를 이용한 텍스트 생성
-utils/checkpoint.py         체크포인트 저장 및 복원
-tests/                      차원, 마스킹, 학습, 체크포인트, 생성 테스트
-```
+## Transformer 구조
 
-## 모델 구조와 Attention
+토큰 ID `(batch, time)`에 토큰 임베딩과 학습 가능한 위치 임베딩을 더합니다. 이어서 Pre-LayerNorm, Causal Multi-Head Self-Attention, Residual Connection, GELU Feed Forward Network로 이루어진 Transformer 블록을 통과합니다. 마지막 LayerNorm과 선형 투영이 다음 토큰의 Vocabulary logits을 출력합니다.
 
-`(batch, time)` 형태의 토큰 ID에 학습 가능한 토큰 임베딩과 위치 임베딩을 더해 `(batch, time, embedding_dim)` 벡터를 만듭니다. 이후 `num_layers`개의 Transformer 블록을 통과합니다. 각 블록은 Pre-LayerNorm 방식의 Causal Self-Attention과 위치별 Feed Forward Network를 적용하고, 각 계산 결과를 Residual Connection으로 입력에 더합니다. 마지막 LayerNorm과 선형 투영은 `(batch, time, vocab_size)` 형태의 어휘 logits을 출력합니다.
+Attention은 `softmax(QKᵀ / √dₖ + mask)V`를 직접 계산합니다. Causal Mask가 미래 위치의 점수를 막아 각 위치가 자기 자신과 과거 토큰만 참조하게 합니다. 학습 시 입력보다 한 문자 오른쪽으로 이동한 토큰을 정답으로 사용하고, Cross Entropy Loss와 AdamW, 역전파, Gradient Clipping으로 가중치를 갱신합니다.
 
-각 Attention Head는 다음 계산을 수행합니다.
+기본 `GPTConfig`는 임베딩 128, Head 4개, 블록 4개, 문맥 길이 128, Feed Forward 512, Dropout 0.1입니다. Vocabulary 크기는 각 데이터셋에서 생성합니다. 기본 차원에서 파라미터 수는 다음과 같습니다.
 
 ```text
-scores  = Q @ K.transpose(-2, -1) / sqrt(head_dim)
-weights = softmax(scores + causal_mask)
-output  = weights @ V
+파라미터 수 = 809,728 + 257 × Vocabulary 크기
 ```
 
-Causal Mask는 대각선 위의 Attention Score를 softmax 전에 해당 자료형의 최솟값으로 바꿉니다. 따라서 위치 `t`는 `0..t`까지의 토큰만 참고하고 이후 토큰은 볼 수 없습니다. Q, K, V는 하나의 선형 투영에서 나뉘며, 여러 Head를 병렬 계산한 뒤 연결하고 출력 투영을 거칩니다.
+## 설치
 
-학습에서는 한 위치 오른쪽으로 이동한 다음 문자들을 정답으로 사용합니다. Cross Entropy Loss를 계산하고 역전파와 AdamW로 가중치를 갱신하며, Gradient Clipping도 적용합니다. 검증 손실은 일정 간격으로 계산합니다. 기본 모델 설정은 임베딩 차원 128, Head 4개, 블록 4개, 문맥 길이 128, Feed Forward 차원 512, Dropout 0.1입니다. 어휘 크기는 학습 데이터에 따라 달라지므로 파라미터 수도 달라집니다.
-
-```text
-파라미터 수 = 809,728 + 257 × 어휘 크기
-```
-
-위 식은 기본 차원과 토큰 임베딩·출력 임베딩을 공유하지 않는 설정에 해당합니다. 실제 파라미터 수는 선택한 데이터와 설정을 기준으로 학습 스크립트가 출력합니다.
-
-## 설치 및 학습
-
-프로젝트 폴더에서 의존성을 설치하고 학습을 시작합니다.
+Python 3.11 이상에서 의존성을 설치합니다.
 
 ```bash
 pip install -r requirements.txt
-python train.py
 ```
 
-기본 실행을 위한 `data/sample.txt`를 포함했습니다. 다른 UTF-8 텍스트를 사용하려면 `--data path/to/corpus.txt`를 지정합니다. CUDA를 사용할 수 있으면 자동으로 선택하며, `--device cpu` 또는 `--device cuda`로 실행 장치를 지정할 수도 있습니다.
+## 데이터셋
 
-학습 중 Step, 학습 손실, 검증 손실, 학습률을 표시합니다. `checkpoints/best.pt`, 주기별 `step_*.pt`, `checkpoints/last.pt`를 저장하고 손실 기록은 `checkpoints/training_log.csv`에 추가합니다. 마지막 체크포인트에서 학습을 재개하려면 다음 명령을 사용합니다.
+### Hugging Face Hub 데이터셋
+
+Hub의 Dataset Repository ID를 지정합니다. 기본적으로 `train` 분할을 읽고, `validation`, `valid`, `dev` 분할이 있으면 검증에 사용합니다. 공식 검증 분할이 없으면 문서 단위로 중복을 제거한 뒤 설정된 비율과 Seed로 검증 데이터를 나눕니다.
 
 ```bash
-python train.py --resume checkpoints/last.pt
+python manage.py create --name english-model --dataset username/english-dataset
 ```
 
-빠른 실행이나 작은 실험에서는 설정을 바꿀 수 있습니다.
+필요한 경우 데이터셋 설정, 파일, 분할, 텍스트 컬럼, Revision을 지정할 수 있습니다.
 
 ```bash
-python train.py --max-steps 20 --batch-size 4 --context-length 64
+python manage.py create --name news-model --dataset username/news-dataset \
+  --dataset-config default --data-file "data/*.jsonl" \
+  --split train --validation-split validation --text-column article \
+  --revision 0123456789abcdef --max-samples 5000 --max-chars 1000000
 ```
 
-기본 모델 및 학습 설정은 `config.py`의 `GPTConfig`에서 관리합니다.
+텍스트 파일은 `txt`, 구조화 파일은 JSONL, CSV, Parquet 형식을 지원합니다. 문자열 컬럼이 하나면 자동 선택하며, 후보가 여러 개면 `--text-column`으로 학습할 컬럼을 지정합니다. 데이터는 `streaming=True`로 읽고 기본 한도를 분할별 문서 10,000개, 문자 2,000,000개로 제한합니다. `--max-samples`와 `--max-chars`로 한도를 조정할 수 있습니다.
+
+Hub Revision은 학습 시 실제 Commit SHA로 고정해 `dataset_info.json`에 기록합니다. 데이터셋 캐시는 원본 데이터와 별도인 `dataset_cache/`를 사용합니다. Hub의 공개 Dataset은 바로 사용할 수 있고, 비공개 Dataset은 사용자가 직접 인증해야 합니다. 예를 들어 `hf auth login` 또는 이미 설정한 `HF_TOKEN` 환경 변수를 사용합니다. 프로젝트는 인증 토큰을 저장하거나 출력하지 않습니다. [Hugging Face 데이터셋 로딩 안내](https://huggingface.co/docs/datasets/en/loading), [인증 안내](https://huggingface.co/docs/huggingface_hub/package_reference/authentication)
+
+### 로컬 텍스트
+
+UTF-8 `.txt` 파일을 지정합니다. 빈 줄로 문서를 구분하며 문서 단위로 학습·검증을 나눕니다.
+
+```bash
+python manage.py create --name custom-model --data data/custom.txt
+```
+
+로컬 원본 파일은 이동하거나 삭제하지 않습니다. 파일 경로와 SHA-256 지문을 모델의 Dataset 정보에 저장합니다.
+
+## 모델 생성
+
+`create`는 모델 디렉터리, 설정, 데이터 출처 정보, 모델별 Character Tokenizer와 무작위 초기 가중치 `initial.pt`를 만듭니다. 생성만 수행하며 학습은 시작하지 않습니다. 모델 이름이 이미 있으면 기존 파일을 보존하고 오류를 출력합니다.
+
+```bash
+python manage.py create --name model-a --dataset username/dataset-a
+python manage.py create --name model-b --dataset username/dataset-b
+python manage.py create --name model-c --data data/custom.txt
+```
+
+각 모델의 설정은 생성 시 따로 지정할 수 있습니다.
+
+```bash
+python manage.py create --name small-model --data data/custom.txt \
+  --embedding-dim 128 --num-heads 4 --num-layers 4 \
+  --context-length 128 --feedforward-dim 512 --dropout 0.1 \
+  --batch-size 16 --learning-rate 0.0003 --max-steps 1000 \
+  --weight-decay 0.1 --grad-clip 1.0
+```
+
+호환되지 않는 Head 수나 길이 등의 설정은 생성 단계에서 검증합니다.
+
+## 모델 학습과 재개
+
+모델 이름으로 해당 모델의 데이터, Tokenizer, 가중치와 Optimizer 상태를 불러와 학습합니다.
+
+```bash
+python manage.py train --name model-a --max-steps 1000
+```
+
+`--max-steps`는 추가할 Step 수가 아니라 목표 전체 Step입니다. 실행 로그에는 모델 이름, 장치, 현재 Step/목표 Step, 실제 학습 손실, 검증 손실, 학습률이 표시됩니다. `training_log.csv`, 주기별 Checkpoint, 최고 Validation Loss의 `best.pt`, 재개용 `last.pt`를 모델 폴더에 저장합니다. 학습이 중단되어도 같은 명령으로 마지막 저장 지점부터 이어갈 수 있습니다.
+
+학습할 데이터셋을 바꾸려면 복제 모델에서 데이터 소스를 지정합니다.
+
+```bash
+python manage.py train --name model-c --data data/compatible.txt --max-steps 1500
+```
+
+Fine-tuning 데이터의 모든 문자는 기존 모델의 Vocabulary에 있어야 합니다. 모르는 문자가 있으면 임의로 `<unk>`에 매핑하지 않고 오류를 출력합니다. 모델 구조 설정은 저장된 Checkpoint와 비교하며, 생성 후 임의로 바꿀 수 없습니다.
+
+## 모델 목록과 정보
+
+```bash
+python manage.py list
+python manage.py info --name model-a
+```
+
+목록에는 모델 이름, 데이터 출처, 상태, 파라미터 수, 마지막 Step, Validation Loss가 표시됩니다. `info`는 설정, Dataset Revision 또는 파일 지문, Tokenizer 크기, Checkpoint 목록, 최근 학습 로그를 보여 줍니다.
+
+## 복제
+
+```bash
+python manage.py clone --source model-a --name model-c
+```
+
+모델 설정, 가중치, Tokenizer, 데이터 메타데이터와 학습 로그를 별도의 파일로 복사합니다. 복제된 모델을 추가 학습해도 원본 파일은 바뀌지 않습니다. 다른 데이터로 학습할 때도 기존 Vocabulary와의 호환성을 검사합니다.
 
 ## 텍스트 생성
 
-학습 후 Prompt를 지정해 텍스트를 생성합니다. Prompt가 문맥 길이보다 길면 최근 토큰만 사용합니다. Greedy Decoding, Temperature, Top-k Sampling을 지원합니다.
-
 ```bash
-python generate.py --checkpoint checkpoints/best.pt --prompt "Hello" --max-new-tokens 100
-python generate.py --checkpoint checkpoints/best.pt --prompt "Hello" --greedy
-python generate.py --checkpoint checkpoints/best.pt --prompt "Hello" --temperature 0.8 --top-k 20
+python manage.py generate --name model-a --prompt "Hello" --max-new-tokens 100
+python manage.py generate --name model-a --prompt "Hello" --temperature 0.8 --top-k 20
+python manage.py generate --name model-a --prompt "Hello" --greedy
 ```
 
-학습 Vocabulary에 없는 문자는 대체 문자로 표시됩니다. 학습 데이터에 포함된 문자를 Prompt에 사용하면 더 적절한 결과를 얻을 수 있습니다.
+학습된 Checkpoint와 모델별 Tokenizer를 불러와 생성합니다. 아직 학습하지 않은 모델은 학습이 필요하다는 오류를 출력합니다. Temperature, Top-k, Greedy Decoding, 새 토큰 수를 설정할 수 있습니다.
 
-## 테스트
+## 저장 구조와 캐시
 
-자동 테스트를 실행합니다.
+```text
+trained_models/<model-name>/
+├── config.json
+├── dataset_info.json
+├── tokenizer.json
+├── model_state.json
+├── initial.pt
+├── best.pt
+├── last.pt
+├── step_*.pt
+└── training_log.csv
+
+dataset_cache/
+└── Hugging Face Datasets 캐시
+```
+
+모델과 캐시 디렉터리는 `.gitignore`에 포함되어 있습니다. 모델 폴더에는 구조 설정, Dataset 출처·Revision, Tokenizer, 가중치, Optimizer 상태, 학습 Step과 손실 기록을 저장합니다. 모델이나 원본 Dataset을 자동으로 삭제하지 않습니다.
+
+## 기존 단일 모델 명령
+
+기존 간단한 실험을 위한 다음 명령도 유지합니다.
 
 ```bash
+python train.py
+python generate.py --prompt "Hello"
 pytest tests/
 ```
 
-토크나이저 인코딩·디코딩, 임베딩과 블록의 차원, Causal Mask와 미래 토큰 차단, 모델 logits와 gradient, 소규모 데이터 과적합, 체크포인트 복원, 텍스트 생성을 검사합니다.
+다중 모델을 관리할 때는 `manage.py` 명령을 사용합니다.
 
-## 한계와 개선 방향
+## 테스트
 
-문자 단위 토큰화는 시퀀스가 길어지고 어휘가 학습 데이터에 종속됩니다. 이 소형 모델은 표현 능력이 제한적이므로 유용한 문장을 생성하려면 더 크고 정제된 데이터가 필요합니다. 향후에는 BPE 토크나이저 직접 구현, 학습률 스케줄링, Mixed Precision, 배치 데이터 로딩, 가중치 공유, 장기 학습 손실 곡선 기록 등을 추가할 수 있습니다.
+```bash
+python -m pytest -q tests/
+```
+
+테스트는 기존 Transformer 구성과 함께 로컬 Dataset 분할, Hub 로더의 Mock 동작과 인증 오류, 모델별 Vocabulary, 중복 이름 방지, 학습·재개, 저장·복원, 목록·정보, 복제 독립성, Tokenizer 호환성, 생성을 검사합니다. Hub에 실제 접속하는 테스트는 자동 실행하지 않습니다.
+
+## 한계
+
+초기 Tokenizer는 Character-level이며 Dataset 문서를 문자열로 다룬 작은 학습용 모델입니다. 고품질 생성에는 더 크고 정제된 데이터와 충분한 학습이 필요합니다. 아직 BPE, 혼합 정밀도, 학습률 스케줄링과 Hugging Face Model Hub 업로드는 지원하지 않습니다.

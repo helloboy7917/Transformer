@@ -1,44 +1,21 @@
 """Train the from-scratch character GPT on a UTF-8 text corpus."""
 
 import argparse
-import csv
 from pathlib import Path
-import random
 
 import torch
 
 from config import GPTConfig, get_device
-from data import CharTokenizer, get_batch, split_token_ids
+from data import CharTokenizer, split_token_ids
 from model import GPTLanguageModel
 from model.gpt import count_parameters
-from utils.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
+from services.trainer import set_seed, train_loop
+from utils.checkpoint import load_checkpoint, read_checkpoint
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA = PROJECT_DIR / "data" / "sample.txt"
 DEFAULT_OUTPUT = PROJECT_DIR / "checkpoints"
-
-
-def set_seed(seed: int) -> None:
-    random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-@torch.inference_mode()
-def estimate_loss(model, train_tokens, validation_tokens, config):
-    model.eval()
-    result = {}
-    for name, tokens in (("train", train_tokens), ("val", validation_tokens)):
-        losses = []
-        for _ in range(config.eval_batches):
-            x, y = get_batch(tokens, config.batch_size, config.context_length)
-            _, loss = model(x, y)
-            losses.append(loss.item())
-        result[name] = sum(losses) / len(losses)
-    model.train()
-    return result
 
 
 def parse_args():
@@ -129,64 +106,21 @@ def main():
     print(f"Device: {device} | vocabulary: {config.vocab_size} | parameters: {count_parameters(model):,}")
     print(
         f"Training characters: {len(train_tokens):,} | validation characters: {len(validation_tokens):,} | "
-        f"context: {config.context_length}"
+        f"context: {config.context_length} | parameters: {count_parameters(model):,}"
     )
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    log_path = args.output_dir / "training_log.csv"
-    if not log_path.exists():
-        with log_path.open("w", newline="", encoding="utf-8") as log_file:
-            csv.writer(log_file).writerow(("step", "train_loss", "validation_loss", "learning_rate"))
-    model.train()
-    for step in range(start_step + 1, config.max_steps + 1):
-        x, y = get_batch(train_tokens, config.batch_size, config.context_length)
-        _, loss = model(x, y)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
-        optimizer.step()
-
-        should_evaluate = step == 1 or step % config.eval_interval == 0 or step == config.max_steps
-        metrics = None
-        if should_evaluate:
-            metrics = estimate_loss(model, train_tokens, validation_tokens, config)
-            learning_rate = optimizer.param_groups[0]["lr"]
-            print(
-                f"step {step:>6} | train loss {metrics['train']:.4f} | "
-                f"val loss {metrics['val']:.4f} | lr {learning_rate:.6g}"
-            )
-            with log_path.open("a", newline="", encoding="utf-8") as log_file:
-                csv.writer(log_file).writerow((step, metrics["train"], metrics["val"], learning_rate))
-
-        checkpoint_args = dict(
-            step=step,
-            model_config=config.to_dict(),
-            tokenizer=tokenizer.to_dict(),
-            best_val_loss=best_val_loss,
-        )
-        if metrics and metrics["val"] < best_val_loss:
-            best_val_loss = metrics["val"]
-            checkpoint_args["best_val_loss"] = best_val_loss
-            save_checkpoint(
-                args.output_dir / "best.pt", model, optimizer, **checkpoint_args
-            )
-        if config.checkpoint_interval > 0 and step % config.checkpoint_interval == 0:
-            save_checkpoint(
-                args.output_dir / f"step_{step:07d}.pt", model, optimizer, **checkpoint_args
-            )
-        if step % args.log_interval == 0 or step == config.max_steps:
-            save_checkpoint(args.output_dir / "last.pt", model, optimizer, **checkpoint_args)
-
-    # Keep a final checkpoint even when max_steps is zero or resume already reached it.
-    if start_step >= config.max_steps:
-        save_checkpoint(
-            args.output_dir / "last.pt",
-            model,
-            optimizer,
-            step=start_step,
-            model_config=config.to_dict(),
-            tokenizer=tokenizer.to_dict(),
-            best_val_loss=best_val_loss,
-        )
+    train_loop(
+        model,
+        train_tokens,
+        validation_tokens,
+        config,
+        tokenizer.to_dict(),
+        args.output_dir,
+        optimizer=optimizer,
+        device=device,
+        start_step=start_step,
+        best_val_loss=best_val_loss,
+        last_save_interval=args.log_interval,
+    )
     print(f"Saved checkpoints in: {args.output_dir.resolve()}")
 
 
