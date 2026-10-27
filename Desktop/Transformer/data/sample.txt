@@ -1,0 +1,13 @@
+Hello, small language model.
+
+This is a tiny, original training story for a character-level Transformer. A curious machine sits by a window and reads one symbol at a time. It keeps a short memory of the words that came before, then guesses which symbol might come next.
+
+Each experiment begins with a clear question. The learner changes one setting, watches the loss, and checks whether the answer improves. A small notebook records the steps so the same experiment can be repeated later. Simple examples make it easier to see how a hidden pattern becomes a useful prediction.
+
+The machine does not know a sentence in advance. It studies many examples, compares each guess with the next character, and adjusts its weights when the guess is wrong. A good guess becomes a little more likely the next time a similar pattern appears.
+
+Attention lets every position look back at earlier positions. A causal mask closes the view of the future, so the model cannot peek at an answer it has not reached. Several small attention heads can notice different patterns, such as spaces, repeated letters, or the start of a phrase.
+
+After training, a prompt gives the model a place to begin. It adds one new character, then uses the longer text to choose another. This modest model is only a learning exercise; its purpose is to make the moving parts visible and easy to change.
+
+Hello, small language model. The machine reads, learns, and writes a new line. It remembers what came before, attends to useful clues, and predicts one symbol at a time.
