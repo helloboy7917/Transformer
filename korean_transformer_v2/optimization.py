@@ -22,7 +22,10 @@ class TrainingStep:
             raise ValueError("CUDA device does not support bfloat16")
         self.precision = precision
         self.grad_clip = grad_clip
-        self.scaler = torch.cuda.amp.GradScaler(enabled=precision == "fp16")
+        if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+            self.scaler = torch.amp.GradScaler("cuda", enabled=precision == "fp16")
+        else:  # PyTorch 2.0/2.1 compatibility.
+            self.scaler = torch.cuda.amp.GradScaler(enabled=precision == "fp16")
 
     def run(self, batches):
         """Perform one optimizer step on an iterable of equally sized microbatches."""
