@@ -8,3 +8,18 @@ checkpoints/
 trained_models/
 dataset_cache/
 data/hf_sample/
+
+# Local datasets, model artifacts, credentials, and environments
+/sample.txt
+/data/*.txt
+/datasets/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+.cache/
