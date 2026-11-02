@@ -23,3 +23,5 @@ def test_training_resume_matches_uninterrupted_run(tmp_path):
         train_documents(docs + ["새 문서"], config=config, output_path=partial, resume_path=partial)
     with pytest.raises(FileExistsError):
         train_documents(docs, config=config, output_path=full)
+    with pytest.raises(FileExistsError):
+        train_documents(docs, config=config, output_path=full, resume_path=partial)

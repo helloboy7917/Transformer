@@ -27,8 +27,8 @@ def train_documents(documents, *, config, output_path, vocab_size=512, device="c
         raise ValueError("max_steps must be positive for training")
     if stop_after is not None and not 0 <= stop_after <= config.max_steps:
         raise ValueError("stop_after must be between zero and max_steps")
-    if Path(output_path).exists() and resume_path is None:
-        raise FileExistsError("output checkpoint already exists; specify resume_path")
+    if Path(output_path).exists() and (resume_path is None or Path(output_path).resolve() != Path(resume_path).resolve()):
+        raise FileExistsError("output checkpoint already exists; resume that checkpoint or choose a new output")
 
     random.seed(config.seed)
     torch.manual_seed(config.seed)
