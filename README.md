@@ -1,5 +1,7 @@
 # Transformer: 다중 모델 언어 모델 실험
 
+한국어 BPE와 학습 재개 기능을 제공하는 V2의 사용법은 [V2 안내서](docs/v2.md)를 참고하세요.
+
 PyTorch로 직접 구현한 Decoder-only Transformer(GPT 구조)를 재사용해 여러 개의 독립적인 문자 단위 언어 모델을 만들고 학습하는 프로젝트입니다. 각 모델은 별도의 설정, 가중치, 토크나이저, 데이터 출처와 학습 기록을 가집니다.
 
 Hugging Face의 사전 학습 모델이나 `nn.Transformer`, `nn.MultiheadAttention`은 사용하지 않습니다. 모델 구조는 `model/`의 직접 구현을 사용하며, Hugging Face Hub는 데이터셋을 가져오는 용도로만 사용합니다.
