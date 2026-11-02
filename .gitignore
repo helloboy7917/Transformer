@@ -1,0 +1,10 @@
+__pycache__/
+.pytest_cache/
+*.py[cod]
+checkpoints/
+.smoke-checkpoints/
+.smoke-default/
+.smoke-managed/
+trained_models/
+dataset_cache/
+data/hf_sample/
