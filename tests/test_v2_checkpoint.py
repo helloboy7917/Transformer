@@ -39,3 +39,5 @@ def test_checkpoint_restores_training_and_rng(tmp_path):
         torch.testing.assert_close(p1, p2)
     with pytest.raises(ValueError, match="tokenizer"):
         restore_checkpoint(state, model=restored, optimizer=opt2, scheduler=sched2, scaler=runner2.scaler, tokenizer=KoreanBPETokenizer([(1, 2)]))
+    with pytest.raises(ValueError, match="fingerprint"):
+        restore_checkpoint(state, model=restored, optimizer=opt2, scheduler=sched2, scaler=runner2.scaler, tokenizer=tokenizer, data_fingerprint="changed")
