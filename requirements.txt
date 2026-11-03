@@ -1,3 +1,4 @@
 torch>=2.0
 pytest>=7.0
 datasets>=4.0,<5.0
+tokenizers>=0.21,<1

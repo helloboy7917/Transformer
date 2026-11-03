@@ -2,6 +2,8 @@
 
 from collections import Counter
 from collections.abc import Iterable
+import json
+from pathlib import Path
 
 
 class KoreanBPETokenizer:
@@ -92,6 +94,75 @@ class KoreanBPETokenizer:
 
     @classmethod
     def from_dict(cls, state: dict):
+        if state.get("type") == "hf_byte_bpe_v1":
+            return FastBPETokenizer.from_dict(state)
         if state.get("type") != "korean_byte_bpe_v1" or not isinstance(state.get("merges"), list):
             raise ValueError("invalid tokenizer state")
         return cls(state["merges"])
+
+    def save(self, path):
+        with Path(path).open("x", encoding="utf-8") as output:
+            json.dump(self.to_dict(), output, ensure_ascii=False)
+
+    @classmethod
+    def load(cls, path):
+        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+class FastBPETokenizer(KoreanBPETokenizer):
+    """Rust byte-level BPE. Token IDs are private to each trained tokenizer."""
+
+    def __init__(self, backend):
+        self.backend = backend
+        if self.eos_token_id is None:
+            raise ValueError("tokenizer is missing EOS")
+
+    @property
+    def vocab_size(self):
+        return self.backend.get_vocab_size()
+
+    @property
+    def eos_token_id(self):
+        return self.backend.token_to_id("<|endoftext|>")
+
+    @classmethod
+    def train(cls, documents, vocab_size=8000, min_frequency=2):
+        from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
+        if vocab_size < 257 or min_frequency < 1:
+            raise ValueError("vocab_size must be at least 257 and min_frequency positive")
+        backend = Tokenizer(models.BPE())
+        backend.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+        backend.decoder = decoders.ByteLevel()
+        trainer = trainers.BpeTrainer(vocab_size=vocab_size, min_frequency=min_frequency,
+                                      initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
+                                      special_tokens=["<|endoftext|>"], show_progress=False)
+        count = 0
+        def checked():
+            nonlocal count
+            for document in documents:
+                if not isinstance(document, str):
+                    raise TypeError("documents must contain strings")
+                if document:
+                    count += 1
+                    yield document
+        backend.train_from_iterator(checked(), trainer=trainer)
+        if not count:
+            raise ValueError("cannot train a tokenizer on empty documents")
+        return cls(backend)
+
+    def encode(self, text, *, add_eos=False):
+        ids = self.backend.encode(text, add_special_tokens=False).ids
+        return ids + [self.eos_token_id] if add_eos else ids
+
+    def decode(self, tokens, *, skip_eos=True):
+        return self.backend.decode([int(token) for token in tokens], skip_special_tokens=skip_eos)
+
+    def to_dict(self):
+        return {"type": "hf_byte_bpe_v1", "json": self.backend.to_str()}
+
+    @classmethod
+    def from_dict(cls, state):
+        from tokenizers import Tokenizer
+        if state.get("type") != "hf_byte_bpe_v1":
+            raise ValueError("invalid tokenizer state")
+        return cls(Tokenizer.from_str(state["json"]))
