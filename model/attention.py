@@ -61,14 +61,14 @@ class CausalSelfAttention(nn.Module):
         qkv = qkv.permute(2, 0, 3, 1, 4)
         query, key, value = qkv.unbind(dim=0)
 
-        attended = scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            causal=True,
-            dropout_p=self.attention_dropout,
-            training=self.training,
-        )
+        if getattr(self, "use_sdpa", False):
+            attended = F.scaled_dot_product_attention(
+                query, key, value, is_causal=True,
+                dropout_p=self.attention_dropout if self.training else 0.0)
+        else:
+            attended = scaled_dot_product_attention(
+                query, key, value, causal=True,
+                dropout_p=self.attention_dropout, training=self.training)
         # Join head outputs: (B, H, T, head_dim) -> (B, T, embedding_dim).
         attended = attended.transpose(1, 2).contiguous().view(batch_size, sequence_length, channels)
         return self.residual_dropout(self.output_projection(attended))

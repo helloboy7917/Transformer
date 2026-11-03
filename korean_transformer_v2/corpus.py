@@ -20,7 +20,6 @@ class DiskCorpus:
         self.db = sqlite3.connect(self.directory / "documents.sqlite")
         self.db.execute("DROP TABLE IF EXISTS documents")
         self.db.execute("CREATE TABLE documents (digest TEXT PRIMARY KEY, split TEXT, text TEXT)")
-        fingerprint = hashlib.sha256()
         with self.db:
             for document in documents:
                 text = normalize_document(document)
@@ -28,20 +27,33 @@ class DiskCorpus:
                     continue
                 digest = hashlib.sha256(f"{seed}\0{text}".encode()).hexdigest()
                 split = "validation" if int(digest, 16) < validation_fraction * 2**256 else "train"
-                cursor = self.db.execute("INSERT OR IGNORE INTO documents VALUES (?, ?, ?)", (digest, split, text))
-                if cursor.rowcount:
-                    fingerprint.update(bytes.fromhex(digest))
-        self.fingerprint = fingerprint.hexdigest()
+                self.db.execute("INSERT OR IGNORE INTO documents VALUES (?, ?, ?)", (digest, split, text))
         for split in ("train", "validation"):
             if not self.db.execute("SELECT 1 FROM documents WHERE split=? LIMIT 1", (split,)).fetchone():
                 self.close()
                 raise ValueError("both splits need documents")
+        # Match the original V2 JSON fingerprint exactly, without building lists.
+        fingerprint = hashlib.sha256(b"[")
+        for index, split in enumerate(("train", "validation")):
+            fingerprint.update(b",[" if index else b"[")
+            for number, text in enumerate(self.documents(split)):
+                if number:
+                    fingerprint.update(b",")
+                fingerprint.update(json.dumps(text, ensure_ascii=False, separators=(",", ":")).encode())
+            fingerprint.update(b"]")
+        fingerprint.update(b"]")
+        self.fingerprint = fingerprint.hexdigest()
 
     def documents(self, split="train", limit=None):
         query = "SELECT text FROM documents WHERE split=? ORDER BY rowid"
-        rows = self.db.execute(query + (" LIMIT ?" if limit else ""), (split, limit) if limit else (split,))
-        for (text,) in rows:
-            yield text
+        # tokenizers may consume this iterator on its Rust worker thread.
+        connection = sqlite3.connect(self.directory / "documents.sqlite")
+        try:
+            rows = connection.execute(query + (" LIMIT ?" if limit else ""), (split, limit) if limit else (split,))
+            for (text,) in rows:
+                yield text
+        finally:
+            connection.close()
 
     def encode(self, tokenizer, split):
         path = self.directory / f"{split}.bin"

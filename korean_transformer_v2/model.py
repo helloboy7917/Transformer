@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from config import GPTConfig
 from model import GPTLanguageModel
+from model.attention import CausalSelfAttention
 
 
 @dataclass
@@ -29,4 +30,8 @@ class V2Config(GPTConfig):
 
 
 def build_model(config: V2Config) -> GPTLanguageModel:
-    return GPTLanguageModel(config)
+    model = GPTLanguageModel(config)
+    for module in model.modules():
+        if isinstance(module, CausalSelfAttention):
+            module.use_sdpa = True
+    return model

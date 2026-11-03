@@ -40,9 +40,7 @@ class TrainingStep:
         total_loss = 0.0
         for x, y in batches:
             x, y = x.to(self.device), y.to(self.device)
-            context = (nullcontext() if self.precision == "fp32" else
-                       torch.autocast(device_type="cuda", dtype=torch.float16 if self.precision == "fp16" else torch.bfloat16))
-            with context:
+            with self.autocast():
                 _, loss = self.model(x, y)
             total_loss += loss.detach().float().item()
             self.scaler.scale(loss / len(batches)).backward()
@@ -52,3 +50,7 @@ class TrainingStep:
         self.scaler.step(self.optimizer)
         self.scaler.update()
         return total_loss / len(batches), self.scaler.get_scale() >= previous_scale
+
+    def autocast(self):
+        return (nullcontext() if self.precision == "fp32" else
+                torch.autocast(device_type="cuda", dtype=torch.float16 if self.precision == "fp16" else torch.bfloat16))
