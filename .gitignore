@@ -23,3 +23,10 @@ data/hf_sample/
 .venv/
 venv/
 .cache/
+*.cache/
+.test-*/
+*.metrics.jsonl
+*.sqlite
+*.sqlite-journal
+*.bin
+*.tokenizer.json

@@ -4,6 +4,12 @@ from collections.abc import Iterator
 from pathlib import Path
 
 
+DATASET_PRESETS = {
+    "korean-wikipedia": ("wikimedia/wikipedia", "20231101.ko"),
+    "kormix": ("AdaMLLab/KorMix", None),
+}
+
+
 def stream_local(path: str | Path, *, max_documents: int | None = None) -> Iterator[str]:
     """Yield nonempty lines without loading the input file into memory."""
     if max_documents is not None and max_documents <= 0:
@@ -28,6 +34,10 @@ def stream_huggingface(repo_id: str, *, split: str = "train", text_column: str =
     if max_documents is not None and max_documents <= 0:
         raise ValueError("max_documents must be positive")
     from datasets import load_dataset
+
+    if repo_id in DATASET_PRESETS:
+        repo_id, default_config = DATASET_PRESETS[repo_id]
+        config = config or default_config
 
     records = load_dataset(repo_id, name=config, split=split, revision=revision, streaming=True)
     count = 0
