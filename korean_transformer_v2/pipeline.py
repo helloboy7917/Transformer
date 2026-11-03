@@ -63,15 +63,15 @@ def train_documents(documents, *, config, output_path, vocab_size=512, device="c
             elif tokenizer_path:
                 tokenizer = KoreanBPETokenizer.load(tokenizer_path)
             else:
-                def sample():
-                    remaining = tokenizer_max_characters
-                    for document in corpus.documents(limit=tokenizer_max_documents):
-                        yield document[:remaining]
-                        remaining -= min(len(document), remaining)
-                        if remaining == 0:
-                            break
-                backend = FastBPETokenizer if tokenizer_backend == "fast" else KoreanBPETokenizer
-                tokenizer = backend.train(sample(), vocab_size=vocab_size)
+                sample_path = corpus.directory / "tokenizer-sample.txt"
+                corpus.write_tokenizer_sample(sample_path, max_documents=tokenizer_max_documents,
+                                              max_characters=tokenizer_max_characters)
+                if tokenizer_backend == "fast":
+                    tokenizer = FastBPETokenizer.train_file(sample_path, vocab_size=vocab_size)
+                else:
+                    with sample_path.open(encoding="utf-8") as sample:
+                        tokenizer = KoreanBPETokenizer.train(
+                            (line.removesuffix("\n") for line in sample), vocab_size=vocab_size)
             train_tokens = corpus.encode(tokenizer, "train")
             val_tokens = corpus.encode(tokenizer, "validation")
             save_prepared(corpus.directory, fingerprint=fingerprint, tokenizer=tokenizer, config=config,

@@ -4,6 +4,7 @@ from collections import Counter
 from collections.abc import Iterable
 import json
 from pathlib import Path
+import tempfile
 
 
 class KoreanBPETokenizer:
@@ -127,27 +128,36 @@ class FastBPETokenizer(KoreanBPETokenizer):
 
     @classmethod
     def train(cls, documents, vocab_size=8000, min_frequency=2):
+        if vocab_size < 257 or min_frequency < 1:
+            raise ValueError("vocab_size must be at least 257 and min_frequency positive")
+        # Consume caller-owned iterators synchronously. Rust must never advance
+        # a generator holding a thread-affine database connection or cursor.
+        with tempfile.TemporaryDirectory(prefix="v2-bpe-") as directory:
+            path = Path(directory) / "sample.txt"
+            with path.open("w", encoding="utf-8", newline="\n") as output:
+                for document in documents:
+                    if not isinstance(document, str):
+                        raise TypeError("documents must contain strings")
+                    if document:
+                        output.write(document + "\n")
+            return cls.train_file(path, vocab_size=vocab_size, min_frequency=min_frequency)
+
+    @classmethod
+    def train_file(cls, path, vocab_size=8000, min_frequency=2):
+        """Train from a completed UTF-8 sample, without Python callbacks."""
         from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
         if vocab_size < 257 or min_frequency < 1:
             raise ValueError("vocab_size must be at least 257 and min_frequency positive")
+        path = Path(path)
+        if path.stat().st_size == 0:
+            raise ValueError("cannot train a tokenizer on empty documents")
         backend = Tokenizer(models.BPE())
         backend.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
         backend.decoder = decoders.ByteLevel()
         trainer = trainers.BpeTrainer(vocab_size=vocab_size, min_frequency=min_frequency,
                                       initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
                                       special_tokens=["<|endoftext|>"], show_progress=False)
-        count = 0
-        def checked():
-            nonlocal count
-            for document in documents:
-                if not isinstance(document, str):
-                    raise TypeError("documents must contain strings")
-                if document:
-                    count += 1
-                    yield document
-        backend.train_from_iterator(checked(), trainer=trainer)
-        if not count:
-            raise ValueError("cannot train a tokenizer on empty documents")
+        backend.train(files=[str(path)], trainer=trainer)
         return cls(backend)
 
     def encode(self, text, *, add_eos=False):

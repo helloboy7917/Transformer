@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 import struct
+from contextlib import closing
 from pathlib import Path
 
 import torch
@@ -65,6 +66,20 @@ class DiskCorpus:
                 count += len(ids)
         # File mapping keeps tokens on disk; only sampled microbatches move to CUDA.
         return torch.from_file(str(path), shared=False, size=count, dtype=torch.long)
+
+    def write_tokenizer_sample(self, path, *, max_documents, max_characters):
+        """Finish all SQLite reads on the caller thread before Rust training."""
+        if max_documents <= 0 or max_characters <= 0:
+            raise ValueError("tokenizer sample limits must be positive")
+        remaining = max_characters
+        with Path(path).open("x", encoding="utf-8", newline="\n") as output:
+            with closing(self.documents(limit=max_documents)) as documents:
+                for document in documents:
+                    sample = document[:remaining]
+                    output.write(sample + "\n")
+                    remaining -= len(sample)
+                    if remaining == 0:
+                        break
 
     def close(self):
         self.db.close()
