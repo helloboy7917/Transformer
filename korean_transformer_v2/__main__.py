@@ -20,6 +20,7 @@ def parser():
     source = train.add_mutually_exclusive_group(required=True)
     source.add_argument("--data", help="UTF-8 text file, one document per line")
     source.add_argument("--dataset", help="Hugging Face dataset repository ID")
+    source.add_argument("--prepared-cache", help="reuse prepared.json and token files without reading source")
     train.add_argument("--text-column", default="text")
     train.add_argument("--dataset-config")
     train.add_argument("--revision")
@@ -78,6 +79,8 @@ def main():
                      stream_huggingface(args.dataset, split=args.split, text_column=args.text_column,
                                         config=args.dataset_config, revision=args.revision,
                                         max_documents=maximum))
+        if args.prepared_cache:
+            documents = None
         if args.resume:
             config = V2Config.from_dict(read_checkpoint(args.resume)["config"])
             if args.max_steps is not None:
@@ -96,10 +99,12 @@ def main():
                                  device=device, resume_path=args.resume, stop_after=args.stop_after,
                                  cache_dir=args.cache_dir, tokenizer_backend=args.tokenizer_backend,
                                  tokenizer_path=args.tokenizer_file, tokenizer_max_documents=args.tokenizer_max_documents,
-                                 tokenizer_max_characters=args.tokenizer_max_characters, log_path=args.log_path)
+                                 tokenizer_max_characters=args.tokenizer_max_characters, log_path=args.log_path,
+                                 prepared_cache=args.prepared_cache)
         if args.export_tokenizer:
             KoreanBPETokenizer.from_dict(read_checkpoint(args.output)["tokenizer"]).save(args.export_tokenizer)
         print(f"saved={result['checkpoint']} step={result['step']}")
+        print(f"prepared_cache={result['cache']} metrics={result['metrics']}")
     else:
         state = read_checkpoint(args.checkpoint)
         tokenizer = KoreanBPETokenizer.from_dict(state["tokenizer"])

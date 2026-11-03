@@ -11,7 +11,7 @@ import torch
 
 from data.dataset import get_batch
 from .checkpoint import read_checkpoint, restore_checkpoint, save_checkpoint
-from .corpus import DiskCorpus
+from .corpus import DiskCorpus, load_prepared, save_prepared
 from .model import build_model
 from .optimization import TrainingStep
 from .scheduler import create_scheduler
@@ -22,7 +22,7 @@ def train_documents(documents, *, config, output_path, vocab_size=512, device="c
                     resume_path=None, stop_after=None, cache_dir=None,
                     tokenizer_backend="python", tokenizer_path=None,
                     tokenizer_max_documents=20000, tokenizer_max_characters=20000000,
-                    log_path=None):
+                    log_path=None, prepared_cache=None):
     """Prepare on disk and train to an absolute step using CPU-mapped tokens."""
     device = torch.device(device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -44,31 +44,41 @@ def train_documents(documents, *, config, output_path, vocab_size=512, device="c
         torch.cuda.manual_seed_all(config.seed)
     state = read_checkpoint(resume_path) if resume_path is not None else None
     root = Path(cache_dir) if cache_dir else Path(output_path).parent / (Path(output_path).stem + ".cache")
-    # Each preparation has its own directory so an existing mapping is never truncated.
-    corpus = DiskCorpus(documents, root / uuid.uuid4().hex,
-                        validation_fraction=config.validation_fraction, seed=config.seed)
-    try:
-        fingerprint = corpus.fingerprint
-        if state is not None:
-            tokenizer = KoreanBPETokenizer.from_dict(state["tokenizer"])
-            if tokenizer_path and KoreanBPETokenizer.load(tokenizer_path).to_dict() != tokenizer.to_dict():
-                raise ValueError("checkpoint tokenizer differs from tokenizer file")
-        elif tokenizer_path:
-            tokenizer = KoreanBPETokenizer.load(tokenizer_path)
-        else:
-            def sample():
-                remaining = tokenizer_max_characters
-                for document in corpus.documents(limit=tokenizer_max_documents):
-                    yield document[:remaining]
-                    remaining -= min(len(document), remaining)
-                    if remaining == 0:
-                        break
-            backend = FastBPETokenizer if tokenizer_backend == "fast" else KoreanBPETokenizer
-            tokenizer = backend.train(sample(), vocab_size=vocab_size)
-        train_tokens = corpus.encode(tokenizer, "train")
-        val_tokens = corpus.encode(tokenizer, "validation")
-    finally:
-        corpus.close()
+    if prepared_cache:
+        fingerprint, tokenizer, train_tokens, val_tokens = load_prepared(prepared_cache, config)
+        cache_path = Path(prepared_cache)
+        if state is not None and state["tokenizer"] != tokenizer.to_dict():
+            raise ValueError("prepared corpus tokenizer differs from checkpoint")
+        if tokenizer_path and KoreanBPETokenizer.load(tokenizer_path).to_dict() != tokenizer.to_dict():
+            raise ValueError("prepared corpus tokenizer differs from tokenizer file")
+    else:
+        corpus = DiskCorpus(documents, root / uuid.uuid4().hex,
+                            validation_fraction=config.validation_fraction, seed=config.seed)
+        try:
+            fingerprint = corpus.fingerprint
+            if state is not None:
+                tokenizer = KoreanBPETokenizer.from_dict(state["tokenizer"])
+                if tokenizer_path and KoreanBPETokenizer.load(tokenizer_path).to_dict() != tokenizer.to_dict():
+                    raise ValueError("checkpoint tokenizer differs from tokenizer file")
+            elif tokenizer_path:
+                tokenizer = KoreanBPETokenizer.load(tokenizer_path)
+            else:
+                def sample():
+                    remaining = tokenizer_max_characters
+                    for document in corpus.documents(limit=tokenizer_max_documents):
+                        yield document[:remaining]
+                        remaining -= min(len(document), remaining)
+                        if remaining == 0:
+                            break
+                backend = FastBPETokenizer if tokenizer_backend == "fast" else KoreanBPETokenizer
+                tokenizer = backend.train(sample(), vocab_size=vocab_size)
+            train_tokens = corpus.encode(tokenizer, "train")
+            val_tokens = corpus.encode(tokenizer, "validation")
+            save_prepared(corpus.directory, fingerprint=fingerprint, tokenizer=tokenizer, config=config,
+                          train_tokens=train_tokens, val_tokens=val_tokens)
+        finally:
+            corpus.close()
+        cache_path = corpus.directory
     config = replace(config, vocab_size=tokenizer.vocab_size)
     if min(len(train_tokens), len(val_tokens)) <= config.context_length:
         raise ValueError("each token split must be longer than context_length")
@@ -137,4 +147,4 @@ def train_documents(documents, *, config, output_path, vocab_size=512, device="c
             save()
     save()
     return {"step": step, "loss": last_loss, "config": config.to_dict(), "checkpoint": str(output_path),
-            "metrics": str(log_path), "cache": str(corpus.directory)}
+            "metrics": str(log_path), "cache": str(cache_path)}

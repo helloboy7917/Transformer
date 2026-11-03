@@ -68,3 +68,31 @@ class DiskCorpus:
 
     def close(self):
         self.db.close()
+
+
+def save_prepared(directory, *, fingerprint, tokenizer, config, train_tokens, val_tokens):
+    """Publish metadata only after both token files have finished writing."""
+    manifest = {"format": "v2_prepared_1", "fingerprint": fingerprint,
+                "tokenizer": tokenizer.to_dict(), "seed": config.seed,
+                "validation_fraction": config.validation_fraction,
+                "train_count": len(train_tokens), "validation_count": len(val_tokens)}
+    path = Path(directory) / "prepared.json"
+    with path.open("x", encoding="utf-8") as output:
+        json.dump(manifest, output, ensure_ascii=False)
+
+
+def load_prepared(directory, config):
+    from .tokenizer import KoreanBPETokenizer
+    directory = Path(directory)
+    manifest = json.loads((directory / "prepared.json").read_text(encoding="utf-8"))
+    if (manifest.get("format") != "v2_prepared_1" or manifest["seed"] != config.seed
+            or manifest["validation_fraction"] != config.validation_fraction):
+        raise ValueError("prepared corpus configuration mismatch")
+    tokens = []
+    for split in ("train", "validation"):
+        count = manifest[f"{split}_count"]
+        path = directory / f"{split}.bin"
+        if count <= config.context_length or path.stat().st_size != count * 8:
+            raise ValueError("prepared corpus token file is truncated or too short")
+        tokens.append(torch.from_file(str(path), shared=False, size=count, dtype=torch.long))
+    return manifest["fingerprint"], KoreanBPETokenizer.from_dict(manifest["tokenizer"]), *tokens
